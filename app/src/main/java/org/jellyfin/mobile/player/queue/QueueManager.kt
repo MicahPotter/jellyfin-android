@@ -11,6 +11,8 @@ import androidx.media3.exoplayer.source.MediaSource
 import androidx.media3.exoplayer.source.MergingMediaSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
+import org.jellyfin.mobile.app.AppPreferences
+import org.jellyfin.mobile.app.StorageManager
 import org.jellyfin.mobile.data.dao.DownloadDao
 import org.jellyfin.mobile.downloads.DownloadFileType
 import org.jellyfin.mobile.player.PlayerException
@@ -47,6 +49,8 @@ class QueueManager(
     private val mediaSourceResolver: MediaSourceResolver by inject()
     private val deviceProfileBuilder: DeviceProfileBuilder by inject()
     private val downloadDao: DownloadDao by inject()
+    private val appPreferences: AppPreferences by inject()
+    private val storageManager: StorageManager by inject()
     private val deviceProfile = deviceProfileBuilder.getDeviceProfile()
 
     private var currentQueue: List<UUID> = emptyList()
@@ -73,17 +77,18 @@ class QueueManager(
         resetPlaybackFallback()
 
         val itemId = when {
-            currentQueue.isNotEmpty() -> currentQueue[currentQueueIndex]
+            currentQueue.isNotEmpty() -> currentQueue.getOrNull(currentQueueIndex)
             else -> playOptions.mediaSourceId?.toUUIDOrNull()
         } ?: return PlayerException.InvalidPlayOptions()
 
-        when (playOptions.playFromDownloads) {
-            true -> playOptions.mediaSourceId?.let {
-                startDownloadPlayback(
-                    itemId = itemId,
-                    playWhenReady = true,
-                )
-            }
+        return when (playOptions.playFromDownloads) {
+            true -> startDownloadPlayback(
+                itemId = itemId,
+                startTime = playOptions.startPosition,
+                audioStreamIndex = playOptions.audioStreamIndex,
+                subtitleStreamIndex = playOptions.subtitleStreamIndex,
+                playWhenReady = true,
+            )
             else -> startRemotePlayback(
                 itemId = itemId,
                 mediaSourceId = playOptions.mediaSourceId,
@@ -94,8 +99,6 @@ class QueueManager(
                 playWhenReady = true,
             )
         }
-
-        return null
     }
 
     private suspend fun startDownloadPlayback(
@@ -105,27 +108,30 @@ class QueueManager(
         subtitleStreamIndex: Int? = null,
         playWhenReady: Boolean = true,
     ): PlayerException? {
-        val download = withContext(Dispatchers.IO) {
-            downloadDao.getDownloadByItemId(itemId)
+        val serverId = appPreferences.currentServerId ?: return PlayerException.UnsupportedContent()
+        val userId = appPreferences.currentUserId ?: return PlayerException.UnsupportedContent()
+        val downloadFiles = withContext(Dispatchers.IO) {
+            downloadDao.getDownloadByItemId(itemId, serverId, userId)?.takeIf(storageManager::verify)
         } ?: return PlayerException.UnsupportedContent()
-
-        val files = withContext(Dispatchers.IO) {
-            downloadDao.getFiles(download.id)
-        }
-
+        val (download, files) = downloadFiles
         val mainFile = files.find { it.type == DownloadFileType.ITEM } ?: return PlayerException.NetworkFailure()
+        val sourceInfo = download.item.mediaSources?.firstOrNull() ?: return PlayerException.UnsupportedContent()
 
         val mediaSource = LocalJellyfinMediaSource(
             itemId = download.itemId,
             item = download.item,
-            sourceInfo = download.item.mediaSources!!.first(),
+            sourceInfo = sourceInfo,
             playSessionId = download.id.toString(),
             playbackDetails = PlaybackDetails(startTime, audioStreamIndex, subtitleStreamIndex),
             remoteFileUri = mainFile.uri,
         )
         startTime?.let { duration -> mediaSource.startTime = duration }
-        audioStreamIndex?.let { index -> mediaSource.selectAudioStream(mediaSource.audioStreams[index]) }
-        subtitleStreamIndex?.let { index -> mediaSource.selectSubtitleStream(mediaSource.subtitleStreams[index]) }
+        audioStreamIndex?.let { index ->
+            mediaSource.audioStreams.getOrNull(index)?.let(mediaSource::selectAudioStream)
+        }
+        subtitleStreamIndex?.let { index ->
+            mediaSource.subtitleStreams.getOrNull(index)?.let(mediaSource::selectSubtitleStream)
+        }
 
         _currentMediaSource.value = mediaSource
 

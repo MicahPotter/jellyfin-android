@@ -1,10 +1,12 @@
 package org.jellyfin.mobile.downloads
 
 import android.content.Context
+import androidx.documentfile.provider.DocumentFile
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import org.jellyfin.mobile.app.AppPreferences
-import org.jellyfin.mobile.app.StorageManager
 import org.jellyfin.mobile.data.dao.DownloadDao
 import org.jellyfin.mobile.data.entity.DownloadEntity
 import org.jellyfin.mobile.data.entity.ServerEntity
@@ -12,6 +14,7 @@ import org.jellyfin.mobile.data.entity.UserEntity
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.extensions.itemsApi
 import org.jellyfin.sdk.model.api.ItemFields
+import java.io.IOException
 import java.util.UUID
 
 class DownloadManager(
@@ -19,8 +22,8 @@ class DownloadManager(
     private val api: ApiClient,
     private val downloadDao: DownloadDao,
     private val appPreferences: AppPreferences,
-    private val storageManager: StorageManager,
 ) {
+    private val enqueueMutex = Mutex()
     companion object {
         /**
          * How many items can be processed at once in [enqueueItems]. If more items are enqueued at once they will be
@@ -34,9 +37,13 @@ class DownloadManager(
         user: UserEntity,
         items: Collection<UUID>,
     ) = withContext(Dispatchers.IO) {
+        enqueueMutex.withLock { enqueueItemsLocked(server, user, items) }
+    }
+
+    private suspend fun enqueueItemsLocked(server: ServerEntity, user: UserEntity, items: Collection<UUID>) {
         for (itemsChunk in items.chunked(ITEMS_BATCH)) {
             val existingItems = downloadDao.getDownloadsByItemIds(itemsChunk)
-                .filter { it.serverId == server.id }
+                .filter { it.serverId == server.id && it.userId == user.id }
                 .associateBy { it.itemId }
 
             val response by api.itemsApi.getItems(
@@ -54,6 +61,7 @@ class DownloadManager(
             for (item in response.items) {
                 var downloadEntity = existingItems[item.id]
                 if (downloadEntity != null) {
+                    if (downloadEntity.status == DownloadStatus.DOWNLOADING || downloadEntity.status == DownloadStatus.QUEUED) continue
                     // If the item already exists we just update the local information for it and requeue it
                     // this will force the download worker to recheck the local file in case it is missing or changed
                     downloadEntity = downloadEntity.copy(
@@ -69,16 +77,15 @@ class DownloadManager(
                         userId = user.id,
                         itemId = item.id,
                         item = item,
-                        path = item.name ?: item.id.toString(),
+                        // Display names are not unique, even within one library.
+                        path = "${server.id}-${user.id}-${item.id}",
                     )
                     downloadDao.insert(downloadEntity)
                 }
             }
         }
 
-        if (!DownloadWorker.isActive(context)) {
-            DownloadWorker.start(context, appPreferences)
-        }
+        DownloadWorker.start(context, appPreferences)
     }
 
     suspend fun resume(downloadEntity: DownloadEntity) = withContext(Dispatchers.IO) {
@@ -89,9 +96,7 @@ class DownloadManager(
             ),
         )
 
-        if (!DownloadWorker.isActive(context)) {
-            DownloadWorker.start(context, appPreferences)
-        }
+        DownloadWorker.start(context, appPreferences)
     }
 
     suspend fun cancel(id: Long) = withContext(Dispatchers.IO) {
@@ -104,17 +109,18 @@ class DownloadManager(
     }
 
     suspend fun delete(id: Long, deleteFiles: Boolean) = withContext(Dispatchers.IO) {
-        val download = downloadDao.getDownload(id) ?: return@withContext
+        if (downloadDao.getDownload(id) == null) return@withContext
+        val files = downloadDao.getFiles(id)
 
-        downloadDao.delete(id)
-
-        if (download.status == DownloadStatus.DOWNLOADING) {
-            DownloadWorker.restart(context, appPreferences)
-        }
+        cancel(id)
 
         if (deleteFiles) {
-            val storageLocation = storageManager.getStorageLocation()
-            storageLocation?.findFile(download.path)?.delete()
+            // A folder change affects future downloads, not the location of existing files.
+            files.forEach { file ->
+                val document = DocumentFile.fromSingleUri(context, file.uri)
+                if (document?.exists() == true && !document.delete()) throw IOException("Cannot remove downloaded file")
+            }
         }
+        downloadDao.delete(id)
     }
 }

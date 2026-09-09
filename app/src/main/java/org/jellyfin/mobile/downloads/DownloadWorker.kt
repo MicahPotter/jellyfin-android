@@ -41,7 +41,9 @@ class DownloadWorker(
                 )
             }.build()
 
-            WorkManager.getInstance(context).enqueueUniqueWork(tag, ExistingWorkPolicy.REPLACE, request).await()
+            WorkManager.getInstance(
+                context
+            ).enqueueUniqueWork(tag, ExistingWorkPolicy.APPEND_OR_REPLACE, request).await()
         }
 
         suspend fun stop(context: Context) {

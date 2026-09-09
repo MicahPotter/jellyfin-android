@@ -54,8 +54,11 @@ class DownloadQueue(
 
     private suspend fun process(downloadWithFiles: DownloadFiles) {
         // Mark as downloading
-        downloadDao.update(downloadWithFiles.download.copy(status = DownloadStatus.DOWNLOADING))
-        val api = apiClientController.getApiClient(downloadWithFiles.download.serverId, downloadWithFiles.download.userId)
+        if (downloadDao.claim(downloadWithFiles.download.id) == 0) return
+        val api = apiClientController.getApiClient(
+            downloadWithFiles.download.serverId,
+            downloadWithFiles.download.userId
+        )
 
         try {
             val queuedFiles = prepareFiles(api, downloadWithFiles)
@@ -70,19 +73,16 @@ class DownloadQueue(
             }
 
             notificationProgressCallback.onEnd()
-            downloadDao.update(downloadWithFiles.download.copy(status = DownloadStatus.DOWNLOADED))
+            downloadDao.finishTransfer(downloadWithFiles.download.id, DownloadStatus.DOWNLOADED)
         } catch (e: CancellationException) {
             // The download could've been canceled by the app, in which case we need to refresh it before making changes
-            val download = downloadDao.getDownload(downloadWithFiles.download.id)
-            if (download?.status == DownloadStatus.DOWNLOADING) {
-                downloadDao.update(download.copy(status = DownloadStatus.QUEUED))
-            }
+            downloadDao.finishTransfer(downloadWithFiles.download.id, DownloadStatus.QUEUED)
             throw e
         } catch (e: IOException) {
-            downloadDao.update(downloadWithFiles.download.copy(status = DownloadStatus.QUEUED))
+            downloadDao.finishTransfer(downloadWithFiles.download.id, DownloadStatus.QUEUED)
             throw e
         } catch (e: Exception) {
-            downloadDao.update(downloadWithFiles.download.copy(status = DownloadStatus.ERROR))
+            downloadDao.finishTransfer(downloadWithFiles.download.id, DownloadStatus.ERROR)
             throw e
         }
     }
@@ -189,6 +189,12 @@ class DownloadQueue(
         fileName: String,
     ): DownloadFileEntity {
         var downloadFile = downloadWithFiles.files.firstOrNull(filter)
+
+        // Keep the persisted location when the user selects a different folder. Retaining
+        // the completed status also lets download() verify and skip an existing file.
+        if (downloadFile != null && DocumentFile.fromSingleUri(context, downloadFile.uri)?.exists() == true) {
+            return downloadFile
+        }
 
         val file = itemLocation.findFile(fileName)
             ?: itemLocation.createFile("", fileName)
