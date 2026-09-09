@@ -141,6 +141,13 @@
     <string name="pref_download_location">Download location</string>
     <string name="view_downloads">View downloads</string>
     <string name="downloads">Downloads</string>
+    <string name="download_ready_only">Ready to play</string>
+    <string name="download_none_ready">No titles are ready to play. Turn off this filter to see pending downloads.</string>
+    <string name="download_queued">Waiting for an allowed connection</string>
+    <string name="download_pause">Pause download</string>
+    <string name="download_retry">Retry download</string>
+    <string name="download_settings">Download settings</string>
+    <string name="download_action_failed">Could not update the download. Check the connection, storage permissions, and free space.</string>
     <string name="downloads_empty">No downloads yet</string>
     <string name="downloads_empty_description">You can download movies and TV shows to watch them offline. Look for the download icon on the item details page.</string>
     <string name="download_notifications_description">Download notifications</string>

@@ -14,13 +14,17 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material.Checkbox
+import androidx.compose.material.CircularProgressIndicator
 import androidx.compose.material.ExperimentalMaterialApi
-import androidx.compose.material.LinearProgressIndicator
+import androidx.compose.material.Icon
+import androidx.compose.material.IconButton
 import androidx.compose.material.ListItem
 import androidx.compose.material.Text
+import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.outlined.Download
+import androidx.compose.material.icons.outlined.DownloadDone
+import androidx.compose.material.icons.outlined.Pause
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.getValue
-import androidx.compose.runtime.produceState
 import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -32,21 +36,19 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import coil3.compose.AsyncImage
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import org.jellyfin.mobile.R
-import org.jellyfin.mobile.app.StorageManager
 import org.jellyfin.mobile.data.entity.DownloadEntity
 import org.jellyfin.mobile.data.entity.DownloadFiles
 import org.jellyfin.mobile.downloads.DownloadFileType
 import org.jellyfin.mobile.downloads.DownloadStatus
-import org.koin.compose.koinInject
 
 @Composable
 fun DownloadsList(
     downloads: List<DownloadFiles>,
+    readyIds: Set<Long>,
     onOpen: (DownloadEntity) -> Unit,
     onDownload: (DownloadEntity) -> Unit,
+    onCancel: (DownloadEntity) -> Unit,
     modifier: Modifier = Modifier,
     contentPadding: PaddingValues = PaddingValues.Zero,
     selection: Set<Long> = emptySet(),
@@ -66,9 +68,11 @@ fun DownloadsList(
                 downloadFiles = downloadFiles,
                 onOpen = { onOpen(downloadFiles.download) },
                 onDownload = { onDownload(downloadFiles.download) },
+                onCancel = { onCancel(downloadFiles.download) },
                 onToggleSelection = { onToggleSelection(downloadFiles.download) },
                 isSelected = selection.contains(downloadFiles.download.id),
                 selectionMode = selectionMode,
+                isVerified = downloadFiles.download.id in readyIds,
             )
         }
     }
@@ -80,20 +84,16 @@ fun DownloadItem(
     downloadFiles: DownloadFiles,
     onOpen: () -> Unit,
     onDownload: () -> Unit,
+    onCancel: () -> Unit,
     onToggleSelection: () -> Unit,
+    isVerified: Boolean,
     modifier: Modifier = Modifier,
     isSelected: Boolean = false,
     selectionMode: Boolean = false,
 ) {
     val (download, files) = downloadFiles
     val context = LocalContext.current
-    val storageManager: StorageManager = koinInject()
-
-    val isVerified by produceState(initialValue = false, downloadFiles) {
-        value = withContext(Dispatchers.IO) {
-            storageManager.verify(downloadFiles)
-        }
-    }
+    val isActive = download.status == DownloadStatus.DOWNLOADING || download.status == DownloadStatus.QUEUED
 
     ListItem(
         modifier = modifier
@@ -101,6 +101,7 @@ fun DownloadItem(
                 onClick = {
                     when {
                         selectionMode -> onToggleSelection()
+                        isActive -> Unit
                         !isVerified -> onDownload()
                         else -> onOpen()
                     }
@@ -147,8 +148,12 @@ fun DownloadItem(
             }
         },
         secondaryText = {
-            if (download.status == DownloadStatus.DOWNLOADING || download.status == DownloadStatus.QUEUED) {
-                LinearProgressIndicator()
+            if (isActive) {
+                Text(
+                    stringResource(
+                        if (download.status == DownloadStatus.QUEUED) R.string.download_queued else R.string.downloading
+                    )
+                )
             } else if (isVerified) {
                 Text(
                     text = Formatter.formatShortFileSize(context, files.sumOf { it.size }),
@@ -162,6 +167,25 @@ fun DownloadItem(
                     overflow = TextOverflow.Ellipsis,
                     maxLines = 1,
                 )
+            }
+        },
+        trailing = {
+            if (!selectionMode) {
+                when {
+                    isActive -> IconButton(onClick = onCancel) {
+                        if (download.status == DownloadStatus.DOWNLOADING) {
+                            CircularProgressIndicator(modifier = Modifier.size(28.dp), strokeWidth = 2.dp)
+                        }
+                        Icon(Icons.Outlined.Pause, contentDescription = stringResource(R.string.download_pause))
+                    }
+                    isVerified -> Icon(
+                        Icons.Outlined.DownloadDone,
+                        contentDescription = stringResource(R.string.download_ready_only)
+                    )
+                    else -> IconButton(onClick = onDownload) {
+                        Icon(Icons.Outlined.Download, contentDescription = stringResource(R.string.download_retry))
+                    }
+                }
             }
         },
         singleLineSecondaryText = true,

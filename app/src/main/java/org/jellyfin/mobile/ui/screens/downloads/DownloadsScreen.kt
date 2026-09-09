@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.systemBarsPadding
 import androidx.compose.material.Card
+import androidx.compose.material.Checkbox
 import androidx.compose.material.DropdownMenu
 import androidx.compose.material.DropdownMenuItem
 import androidx.compose.material.Icon
@@ -36,12 +37,14 @@ import androidx.compose.material.icons.automirrored.outlined.ArrowBack
 import androidx.compose.material.icons.outlined.Close
 import androidx.compose.material.icons.outlined.Delete
 import androidx.compose.material.icons.outlined.MoreVert
+import androidx.compose.material.icons.outlined.Settings
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.mutableStateSetOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -50,6 +53,8 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.compose.LifecycleEventEffect
 import androidx.lifecycle.viewmodel.compose.viewModel
 import org.jellyfin.mobile.R
 import org.jellyfin.mobile.downloads.DownloadsViewModel
@@ -60,6 +65,10 @@ fun DownloadsScreen(
     onBackPressed: () -> Unit = {},
 ) {
     val downloads by viewModel.downloads.collectAsState()
+    val actionFailed by viewModel.actionFailed.collectAsState()
+    val readyIds by viewModel.readyIds.collectAsState()
+    var readyOnly by rememberSaveable { mutableStateOf(false) }
+    val visibleDownloads = if (readyOnly) downloads.filter { it.download.id in readyIds } else downloads
     val storageLocation by viewModel.storageLocation.collectAsState()
     val storageLocationAccessible by viewModel.storageLocationAccessible.collectAsState()
     val selection = remember { mutableStateSetOf<Long>() }
@@ -67,6 +76,8 @@ fun DownloadsScreen(
     var showMenu by remember { mutableStateOf(false) }
 
     val selectionMode = selection.isNotEmpty()
+
+    LifecycleEventEffect(Lifecycle.Event.ON_RESUME) { viewModel.refreshStorage() }
 
     val storageLocationPicker = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocumentTree()) { uri ->
         if (uri != null) viewModel.changeStorageLocation(uri)
@@ -150,6 +161,14 @@ fun DownloadsScreen(
                 },
                 actions = {
                     Row {
+                        if (!selectionMode) {
+                            IconButton(onClick = { viewModel.openSettings() }) {
+                                Icon(
+                                    Icons.Outlined.Settings,
+                                    contentDescription = stringResource(R.string.download_settings)
+                                )
+                            }
+                        }
                         AnimatedVisibility(
                             visible = selectionMode,
                             enter = fadeIn(),
@@ -174,10 +193,10 @@ fun DownloadsScreen(
                                         expanded = showMenu,
                                         onDismissRequest = { showMenu = false },
                                     ) {
-                                        if (selection.size < downloads.size) {
+                                        if (selection.size < visibleDownloads.size) {
                                             DropdownMenuItem(
                                                 onClick = {
-                                                    selection.addAll(downloads.map { it.download.id })
+                                                    selection.addAll(visibleDownloads.map { it.download.id })
                                                     showMenu = false
                                                 },
                                             ) {
@@ -210,6 +229,21 @@ fun DownloadsScreen(
                     .fillMaxSize()
                     .padding(innerPadding),
             ) {
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Checkbox(
+                        checked = readyOnly,
+                        onCheckedChange = {
+                            readyOnly = it
+                            selection.clear()
+                        },
+                    )
+                    TextButton(onClick = {
+                        readyOnly = !readyOnly
+                        selection.clear()
+                    }) {
+                        Text(stringResource(R.string.download_ready_only))
+                    }
+                }
                 if (storageLocation == null) {
                     StorageLocationNotSetCard(
                         onFix = { storageLocationPicker.launch(null) },
@@ -222,17 +256,35 @@ fun DownloadsScreen(
                     )
                 }
 
-                if (downloads.isEmpty()) {
+                if (actionFailed) {
+                    Text(
+                        stringResource(R.string.download_action_failed),
+                        color = MaterialTheme.colors.error,
+                        modifier = Modifier.padding(16.dp),
+                    )
+                }
+
+                if (readyOnly && visibleDownloads.isEmpty()) {
+                    Text(
+                        text = stringResource(R.string.download_none_ready),
+                        modifier = Modifier.padding(24.dp),
+                    )
+                } else if (downloads.isEmpty()) {
                     DownloadsEmpty(modifier = Modifier.weight(1f))
                 } else {
                     DownloadsList(
-                        downloads = downloads,
+                        downloads = visibleDownloads,
+                        readyIds = readyIds,
                         onOpen = { viewModel.openDownload(it) },
                         onDownload = { viewModel.download(it) },
+                        onCancel = { viewModel.cancelDownload(it) },
                         selection = selection,
                         onToggleSelection = { download ->
-                            if (selection.contains(download.id)) selection.remove(download.id)
-                            else selection.add(download.id)
+                            if (selection.contains(download.id)) {
+                                selection.remove(download.id)
+                            } else {
+                                selection.add(download.id)
+                            }
                         },
                         modifier = Modifier.weight(1f),
                     )

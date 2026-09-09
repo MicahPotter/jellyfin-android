@@ -26,6 +26,16 @@ data class PlayOptions(
     val playFromDownloads: Boolean?,
 ) : Parcelable {
     companion object {
+        fun forDownload(itemId: UUID) = PlayOptions(
+            ids = listOf(itemId),
+            mediaSourceId = itemId.toString(),
+            startIndex = 0,
+            startPosition = null,
+            audioStreamIndex = null,
+            subtitleStreamIndex = null,
+            playFromDownloads = true,
+        )
+
         fun fromJson(json: String): PlayOptions? = try {
             val jsonObject = Json.parseToJsonElement(json).jsonObject
             PlayOptions(

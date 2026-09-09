@@ -3,6 +3,7 @@ const features = [
     "clientsettings",
     "displaylanguage",
     "downloadmanagement",
+    "downloadstatus",
     "exit",
     "externallinks",
     "filedownload",
@@ -69,6 +70,14 @@ window.NativeShell = {
 
     openDownloadManager() {
         window.NativeInterface.openDownloadManager();
+    },
+
+    getDownloadStates() {
+        return JSON.parse(window.NativeInterface.getDownloadStates());
+    },
+
+    playDownload(itemId) {
+        return window.NativeInterface.playDownload(itemId);
     },
 
     openClientSettings() {

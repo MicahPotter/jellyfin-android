@@ -8,6 +8,7 @@ import android.webkit.JavascriptInterface
 import androidx.core.content.ContextCompat
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -16,9 +17,14 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
 import org.jellyfin.mobile.BuildConfig
+import org.jellyfin.mobile.app.AppPreferences
+import org.jellyfin.mobile.app.StorageManager
+import org.jellyfin.mobile.data.dao.DownloadDao
+import org.jellyfin.mobile.downloads.DownloadStatus
 import org.jellyfin.mobile.events.ActivityEvent
 import org.jellyfin.mobile.events.ActivityEventHandler
 import org.jellyfin.mobile.player.deviceprofile.DeviceProfileBuilder
+import org.jellyfin.mobile.player.interaction.PlayOptions
 import org.jellyfin.mobile.utils.Constants
 import org.jellyfin.mobile.utils.Constants.EXTRA_ALBUM
 import org.jellyfin.mobile.utils.Constants.EXTRA_ARTIST
@@ -35,6 +41,7 @@ import org.jellyfin.mobile.webapp.RemotePlayerService
 import org.jellyfin.mobile.webapp.RemoteVolumeProvider
 import org.jellyfin.sdk.api.client.ApiClient
 import org.jellyfin.sdk.api.client.util.AuthorizationHeaderBuilder
+import org.jellyfin.sdk.model.api.MediaType
 import org.jellyfin.sdk.model.serializer.toUUID
 import org.json.JSONArray
 import org.koin.core.component.KoinComponent
@@ -48,6 +55,9 @@ class NativeInterface(private val context: Context) : KoinComponent {
     private val activityEventHandler: ActivityEventHandler = get()
     private val remoteVolumeProvider: RemoteVolumeProvider by inject()
     private val deviceProfileBuilder: DeviceProfileBuilder by inject()
+    private val appPreferences: AppPreferences by inject()
+    private val downloadDao: DownloadDao by inject()
+    private val storageManager: StorageManager by inject()
 
     @SuppressLint("HardwareIds")
     @JavascriptInterface
@@ -110,7 +120,10 @@ class NativeInterface(private val context: Context) : KoinComponent {
             putExtra(EXTRA_ARTIST, options[EXTRA_ARTIST]?.jsonPrimitive?.contentOrNull ?: "")
             putExtra(EXTRA_ALBUM, options[EXTRA_ALBUM]?.jsonPrimitive?.contentOrNull ?: "")
             putExtra(EXTRA_IMAGE_URL, options[EXTRA_IMAGE_URL]?.jsonPrimitive?.contentOrNull ?: "")
-            putExtra(EXTRA_POSITION, options[EXTRA_POSITION]?.jsonPrimitive?.longOrNull ?: PlaybackState.PLAYBACK_POSITION_UNKNOWN)
+            putExtra(
+                EXTRA_POSITION,
+                options[EXTRA_POSITION]?.jsonPrimitive?.longOrNull ?: PlaybackState.PLAYBACK_POSITION_UNKNOWN
+            )
             putExtra(EXTRA_DURATION, options[EXTRA_DURATION]?.jsonPrimitive?.longOrNull ?: 0L)
             putExtra(EXTRA_CAN_SEEK, options[EXTRA_CAN_SEEK]?.jsonPrimitive?.booleanOrNull ?: false)
             putExtra(EXTRA_IS_LOCAL_PLAYER, options[EXTRA_IS_LOCAL_PLAYER]?.jsonPrimitive?.booleanOrNull ?: true)
@@ -167,6 +180,38 @@ class NativeInterface(private val context: Context) : KoinComponent {
     fun openDownloadManager() {
         emitEvent(ActivityEvent.OpenDownloads)
     }
+
+    /** Called on WebView's bridge thread. Only expose state for the active account, never paths or credentials. */
+    @JavascriptInterface
+    fun getDownloadStates(): String = runCatching {
+        val serverId = appPreferences.currentServerId ?: return "[]"
+        val userId = appPreferences.currentUserId ?: return "[]"
+        buildJsonArray {
+            downloadDao.getDownloadSnapshot(serverId, userId).forEach { files ->
+                val status = if (files.download.status == DownloadStatus.DOWNLOADED && !storageManager.verify(files)) {
+                    DownloadStatus.ERROR
+                } else {
+                    files.download.status
+                }
+                add(
+                    buildJsonObject {
+                        put("itemId", files.download.itemId.toString())
+                        put("status", status.name)
+                    }
+                )
+            }
+        }.toString()
+    }.getOrDefault("[]")
+
+    @JavascriptInterface
+    fun playDownload(itemId: String): Boolean = runCatching {
+        val serverId = appPreferences.currentServerId ?: return false
+        val userId = appPreferences.currentUserId ?: return false
+        val files = downloadDao.getDownloadByItemId(itemId.toUUID(), serverId, userId) ?: return false
+        if (!storageManager.verify(files) || files.download.item.mediaType != MediaType.VIDEO) return false
+        emitEvent(ActivityEvent.LaunchNativePlayer(PlayOptions.forDownload(files.download.itemId)))
+        true
+    }.getOrDefault(false)
 
     @JavascriptInterface
     fun openClientSettings() {
