@@ -48,9 +48,18 @@ export class ExoPlayerPlugin {
     }
 
     canPlayItem(item, playOptions) {
-        return this._nativePlayer.isEnabled() &&
+        return (this._nativePlayer.isEnabled() || this._nativePlayer.hasDownload(item.Id, playOptions.mediaSourceId || '')) &&
             playOptions.fullscreen &&
             !this.playbackManager.syncPlayEnabled;
+    }
+
+    // Allows the normal web Play action to use the native queue before server metadata or intro requests.
+    getLocalPlaybackItems(options) {
+        if (!options.fullscreen || this.playbackManager.syncPlayEnabled) return null;
+        const items = options.items || options.ids?.map(Id => ({ Id, MediaType: 'Video', ServerId: options.serverId }));
+        const item = items?.[options.startIndex || 0];
+        if (!item?.Id || !this._nativePlayer.hasDownload(item.Id, options.mediaSourceId || '')) return null;
+        return items;
     }
 
     async stop(destroyPlayer) {

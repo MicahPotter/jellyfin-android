@@ -79,7 +79,7 @@ val applicationModule = module {
     single { WebappFunctionChannel() }
 
     // Bridge interfaces
-    single { NativePlayer(get(), get(), get(named(PLAYER_EVENT_CHANNEL))) }
+    single { NativePlayer(get(), get(), get(named(PLAYER_EVENT_CHANNEL)), get()) }
     single { MediaSegments(get()) }
 
     // ViewModels
@@ -183,6 +183,7 @@ val applicationModule = module {
 
     single(createdAtStart = true) { StorageManager(get(), get()) }
     single { DownloadManager(get(), get(), get(), get()) }
+    single { org.jellyfin.mobile.downloads.DownloadedMediaResolver(get(), get(), get()) }
     single { DownloadNotificationManager(get()) }
     factory { DownloadQueue(get(), get(), get(), get(), get(), get()) }
     single { FileDownloader(get()) }

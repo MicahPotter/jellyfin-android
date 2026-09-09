@@ -3,12 +3,14 @@ package org.jellyfin.mobile.bridge
 import android.webkit.JavascriptInterface
 import kotlinx.coroutines.channels.Channel
 import org.jellyfin.mobile.app.AppPreferences
+import org.jellyfin.mobile.downloads.DownloadedMediaResolver
 import org.jellyfin.mobile.events.ActivityEvent
 import org.jellyfin.mobile.events.ActivityEventHandler
 import org.jellyfin.mobile.player.interaction.PlayOptions
 import org.jellyfin.mobile.player.interaction.PlayerEvent
 import org.jellyfin.mobile.settings.VideoPlayerType
 import org.jellyfin.sdk.model.extensions.ticks
+import org.jellyfin.sdk.model.serializer.toUUIDOrNull
 import kotlin.time.Duration.Companion.milliseconds
 
 @Suppress("unused")
@@ -16,10 +18,17 @@ class NativePlayer(
     private val appPreferences: AppPreferences,
     private val activityEventHandler: ActivityEventHandler,
     private val playerEventChannel: Channel<PlayerEvent>,
+    private val downloadedMedia: DownloadedMediaResolver,
 ) {
 
     @JavascriptInterface
     fun isEnabled() = appPreferences.videoPlayerType == VideoPlayerType.EXO_PLAYER
+
+    @JavascriptInterface
+    fun hasDownload(itemId: String, mediaSourceId: String): Boolean {
+        val id = itemId.toUUIDOrNull() ?: return false
+        return downloadedMedia.find(id, mediaSourceId.takeIf(String::isNotEmpty)) != null
+    }
 
     @JavascriptInterface
     fun loadPlayer(args: String) {

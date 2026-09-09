@@ -28,7 +28,7 @@ data class PlayOptions(
     companion object {
         fun forDownload(itemId: UUID) = PlayOptions(
             ids = listOf(itemId),
-            mediaSourceId = itemId.toString(),
+            mediaSourceId = null,
             startIndex = 0,
             startPosition = null,
             audioStreamIndex = null,
